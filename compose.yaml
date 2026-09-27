@@ -1,0 +1,18 @@
+services:
+  scoring:
+    build: .
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ports: ["127.0.0.1:8080:8080"]
+    environment:
+      LEADHARBOUR_API_TOKEN: ${LEADHARBOUR_API_TOKEN:?Set a random local token}
+    tmpfs: [/tmp]
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [local-llm]
+    ports: ["127.0.0.1:11434:11434"]
+    volumes: [ollama_models:/root/.ollama]
+
+volumes:
+  ollama_models:

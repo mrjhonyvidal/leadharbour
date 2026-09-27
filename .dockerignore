@@ -1,0 +1,11 @@
+.git
+.venv
+data
+notebooks
+tests
+docs
+terraform
+*.tfstate
+*.tfvars
+.env
+__pycache__
