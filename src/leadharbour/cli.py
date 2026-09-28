@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from .api import app_from_environment
+from .comparison import compare_models
 from .data import fetch_dataset
 from .decision import estimate_generation_cost
 from .model import evaluate, score, train
@@ -26,6 +27,7 @@ def parser() -> argparse.ArgumentParser:
     fetch.add_argument("--force", action="store_true")
     actions.add_parser("train", help="Train the ordered logistic regression baseline")
     actions.add_parser("evaluate", help="Check the held-out source period")
+    actions.add_parser("compare", help="Compare base rate, regression and XGBoost on one ordered split")
     scoring = actions.add_parser("score", help="Score one local JSON feature record")
     scoring.add_argument("features_file", type=Path)
     server = actions.add_parser("serve", help="Serve the local or Cloud Run scoring API")
@@ -57,6 +59,8 @@ def execute(arguments: argparse.Namespace) -> dict | None:
         return train(DEFAULT_CSV, DEFAULT_ARTIFACT)
     if arguments.action == "evaluate":
         return evaluate(DEFAULT_CSV, DEFAULT_ARTIFACT)
+    if arguments.action == "compare":
+        return compare_models(DEFAULT_CSV)
     if arguments.action == "score":
         features = json.loads(arguments.features_file.read_text())
         return {"propensity": score(features, DEFAULT_ARTIFACT),

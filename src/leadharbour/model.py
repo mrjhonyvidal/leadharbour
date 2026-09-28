@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+from math import ceil
 from pathlib import Path
 
 import joblib
+import numpy as np
 import pandas as pd
+import sklearn
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
+from sklearn.metrics import average_precision_score, brier_score_loss, log_loss, roc_auc_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 
@@ -27,31 +30,64 @@ def ordered_split(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.D
     return frame.iloc[:training_end], frame.iloc[training_end:validation_end], frame.iloc[validation_end:]
 
 
-def make_pipeline() -> Pipeline:
+def make_preprocessor(numeric_features: tuple[str, ...] = NUMERIC_FEATURES) -> ColumnTransformer:
     if set(FEATURES).intersection(FORBIDDEN_FEATURES):
         raise AssertionError("A post-contact or sensitive field entered the feature list")
-    transform = ColumnTransformer([
+    return ColumnTransformer([
         ("categories", Pipeline([
             ("fill", SimpleImputer(strategy="most_frequent")),
             ("encode", OneHotEncoder(handle_unknown="ignore")),
         ]), list(CATEGORICAL_FEATURES)),
-        ("numbers", SimpleImputer(strategy="median"), list(NUMERIC_FEATURES)),
+        ("numbers", SimpleImputer(strategy="median"), list(numeric_features)),
     ])
-    return Pipeline([("transform", transform),
+def make_pipeline() -> Pipeline:
+    return Pipeline([("transform", make_preprocessor()),
                      ("classifier", LogisticRegression(max_iter=1000, random_state=17))])
 
 
 def quality_report(pipeline: Pipeline, frame: pd.DataFrame) -> dict:
     labels = frame["y"].eq("yes").astype(int)
+    probabilities = pipeline.predict_proba(feature_frame(frame))[:, 1]
+    return probability_report(labels, probabilities)
+
+
+def probability_report(labels: pd.Series, probabilities: np.ndarray) -> dict:
+    """Measure ranking, probability quality and a fixed review capacity."""
     if labels.nunique() != 2:
         raise ValueError("Evaluation period must contain both outcomes")
-    probabilities = pipeline.predict_proba(feature_frame(frame))[:, 1]
+    if len(labels) != len(probabilities) or not np.isfinite(probabilities).all():
+        raise ValueError("Expected one finite probability per label")
+    scores = np.asarray(probabilities)
+    if ((scores < 0) | (scores > 1)).any():
+        raise ValueError("Scores must be probabilities between zero and one")
+    capacity = ceil(len(labels) * 0.1)
+    cutoff = np.partition(scores, len(scores) - capacity)[len(scores) - capacity]
+    above = scores > cutoff
+    tied = scores == cutoff
+    labels_array = labels.to_numpy()
+    needed_from_tie = capacity - int(above.sum())
+    tied_positives = int(labels_array[tied].sum())
+    tied_negatives = int(tied.sum()) - tied_positives
+    positives_above = int(labels_array[above].sum())
+    expected_positives = positives_above + needed_from_tie * tied_positives / int(tied.sum())
+    precision = expected_positives / capacity
+    lower_precision = (positives_above + max(0, needed_from_tie - tied_negatives)) / capacity
+    upper_precision = (positives_above + min(needed_from_tie, tied_positives)) / capacity
+    positive_rate = float(labels.mean())
     return {
-        "rows": len(frame),
+        "rows": len(labels),
         "positive_rate": round(float(labels.mean()), 4),
         "roc_auc": round(float(roc_auc_score(labels, probabilities)), 4),
         "average_precision": round(float(average_precision_score(labels, probabilities)), 4),
         "brier_score": round(float(brier_score_loss(labels, probabilities)), 4),
+        "log_loss": round(float(log_loss(labels, probabilities, labels=[0, 1])), 4),
+        "review_capacity": capacity,
+        "precision_at_10_percent": round(precision, 4),
+        "precision_at_10_percent_bounds": [round(lower_precision, 4), round(upper_precision, 4)],
+        "ties_at_cutoff": int(tied.sum()),
+        "selected_from_cutoff_tie": needed_from_tie,
+        "recall_at_10_percent": round(float(expected_positives / labels.sum()), 4),
+        "lift_at_10_percent": round(precision / positive_rate, 4),
     }
 
 
@@ -63,6 +99,7 @@ def train(csv_path: Path, artifact_path: Path) -> dict:
     source_hash = hashlib.sha256(csv_path.read_bytes()).hexdigest()
     report = {
         "source_sha256": source_hash,
+        "framework_versions": {"scikit_learn": sklearn.__version__},
         "features": list(FEATURES),
         "excluded_examples": list(FORBIDDEN_FEATURES),
         "split": "first 60% train, next 20% validation, final 20% test in source order",

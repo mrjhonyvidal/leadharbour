@@ -1,4 +1,4 @@
-.PHONY: setup fetch train test eval serve sandbox deploy
+.PHONY: setup fetch train compare test eval serve sandbox deploy
 
 REGION ?= europe-west2
 
@@ -11,6 +11,9 @@ fetch:
 
 train:
 	.venv/bin/leadharbour train
+
+compare:
+	.venv/bin/leadharbour compare
 
 test:
 	.venv/bin/pytest -q
