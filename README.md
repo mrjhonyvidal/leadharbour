@@ -4,9 +4,9 @@
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)](pyproject.toml) [![Licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
 
-## Five-minute local route
+## Local route
 
-You need Python 3.11+, internet access for the one-time data download, and about 100 MB of disk space. From this directory:
+You need Python 3.11+, internet access for the one-time data download, and space for scientific Python packages. From this directory:
 
 ```bash
 python3 -m venv .venv
@@ -15,6 +15,7 @@ pip install -e '.[test]'
 leadharbour fetch
 leadharbour train
 leadharbour evaluate
+leadharbour compare
 leadharbour score examples/lead_features.json
 pytest -q
 ```
@@ -23,7 +24,18 @@ pytest -q
 
 The model trains on the first 60% of source rows, validates on the next 20%, and tests on the final 20%. The source says records are date ordered, but it has no stable person ID, so repeat contacts may cross the split. The included run found validation ROC AUC **0.5967** and later-period test ROC AUC **0.5633**. The test outcome rate moved from **0.1107** in validation to **0.3083** in test, and the Brier score worsened from **0.1020** to **0.2798**. Run it yourself before trusting those numbers on your machine. This is an example of why a working pipeline does not make a useful campaign model.
 
-The [notebook](notebooks/01_predictive_maths_and_scoring.ipynb) explores the changing outcome rate, reads the model card and works through a small expected-value example. Run `leadharbour fetch` and `leadharbour train` before opening it. The notebook works in JupyterLab or Colab after installing the project and uploading or fetching the data there.
+`compare` fits a training-rate baseline, logistic regression, logistic regression with a derived history flag, and a fixed XGBoost candidate. It uses the same source order and five allowed input fields. The extra flag is `previous > 0`; it is an analysis variant, not part of the serving schema. On macOS, XGBoost may also need `brew install libomp`. If you installed only the core package, run `pip install -e '.[comparison]'` first. The comparison does not replace the deployed model artifact.
+
+| Fixed candidate | Validation ROC AUC | Later ROC AUC | Later Brier | Later precision at 10% |
+| --- | ---: | ---: | ---: | ---: |
+| Training-rate baseline | 0.5000 | 0.5000 | 0.2810 | No ranking |
+| Logistic regression | 0.5967 | 0.5633 | 0.2798 | 0.5880 |
+| Logistic with history flag | 0.5955 | 0.5595 | 0.2802 | 0.5880 |
+| XGBoost | 0.5355 | 0.5291 | 0.2802 | 0.3268 |
+
+These are observed values from one fixed teaching run. Top-ten precision is **the expected value under random tie-breaking**, because many records receive identical scores. At the later cutoff, logistic regression ties 1,629 records and XGBoost ties 2,772 records; the latter needs only 824 of that tied group. `compare` reports the possible precision bounds and tie counts so the ranking is not presented as precise. The later positive rate is **0.3083**. A model can look similar on probability loss while giving a different or poorly resolved review queue. Do not retune parameters against the later test and then report that same period as fresh evidence. The [article](POST.md) explains the metrics and the repeatable modelling loop.
+
+The [notebook](notebooks/01_predictive_maths_and_scoring.ipynb) explores source shifts, compares the four candidates, reads the model card and works through a small expected-value example. Run `leadharbour fetch` and `leadharbour train` before opening it. The notebook works in JupyterLab or Colab after installing the project and uploading or fetching the data there.
 
 ## What is here
 
@@ -31,6 +43,7 @@ The [notebook](notebooks/01_predictive_maths_and_scoring.ipynb) explores the cha
 | --- | --- |
 | `src/leadharbour/data.py` | Source fetch, provenance and feature allowlist. |
 | `src/leadharbour/model.py` | Ordered split, preprocessing, logistic regression, metrics and model card. |
+| `src/leadharbour/comparison.py` | Fixed base-rate, regression and XGBoost comparison with source-shift checks. |
 | `src/leadharbour/decision.py` | Explicit value and capacity calculations for human review. |
 | `src/leadharbour/api.py` | Small authenticated scoring service. |
 | `src/leadharbour/agent_tools.py` | Narrow tools for scoring and requesting review. |
@@ -103,8 +116,9 @@ At the illustrative rates above, 10% of leads drafted with 500 input and 150 out
 
 1. Inspect the raw source and provenance manifest, then run the notebook.
 2. Change one allowed feature or split rule and see how the held-out result moves.
-3. Read the model card and add calibration and group checks before considering another model.
-4. Keep the API private. Test invalid features, authentication and the ADK review path.
-5. Only with suitable treatment and control data, estimate uplift and compare policies offline.
+3. Run `leadharbour compare`; inspect the period profiles, base-rate result, ranking metrics and probability metrics. The later test is for reporting, not tuning.
+4. Read the model card and add calibration and group checks before considering another serving model.
+5. Keep the API private. Test invalid features, authentication and the ADK review path.
+6. Only with suitable treatment and control data, estimate uplift and compare policies offline.
 
 See [the research notes](docs/research_references.md) and [the article](POST.md). Contributions that improve tests, documentation or the learning route are welcome. Please do not add real personal data or deploy an autonomous send operation in a pull request.
